@@ -29,12 +29,12 @@ distiller:
   out_layer_type: expand-last
 
   # Task & loss
-  n_tasks: 2
+  n_tasks: 3
   task_emb_type: expand-last
   loss_type: l1
   feat_pen_loss: 0.0
   cosine_loss: 1.0  # cosine similarity loss
-  pred_layer_id: [4, 12]
+  pred_layer_id: [4, 8, 12]
 
   # Initialization
   init_teacher_conv_layers: true

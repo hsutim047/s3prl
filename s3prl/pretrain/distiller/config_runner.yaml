@@ -23,6 +23,6 @@ pretrain_expert:
     num_workers: 24
     train_batch_size: 24
     max_timestep: 0
-    libri_root: /work/harry87122/dataset/LibriSpeech/
-    file_path: /work/harry87122/s3prl/s3prl/data/len_for_bucket
-    sets: ['train-clean-100', 'train-clean-360', 'train-other-500']
+    libri_root: /work/twsmpkh238/modelSteal/s3prl/s3prl/data
+    file_path: /work/twsmpkh238/modelSteal/s3prl/s3prl/data/aishell_csv/
+    sets: ['aishell-10h']
