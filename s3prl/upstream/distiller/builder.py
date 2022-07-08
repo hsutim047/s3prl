@@ -112,7 +112,7 @@ class PretrainedDistiller(DistillerBuilder):
         # Load from a PyTorch state_dict
         if self.load:
             self.model = self.load_model(
-                self.model, self.all_states["Distiller"], verbose
+                self.model, self.all_states["Distiller"], verbose # TODO
             )
             if verbose:
                 print(

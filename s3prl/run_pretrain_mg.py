@@ -115,14 +115,14 @@ def get_pretrain_args():
         else:
             raise FileNotFoundError('Wrong file path for runner config.')
         
-        # if args.upstream_config is None:
-        #     default_upstream_config = f'pretrain/{upstream_dirs[0]}/config_model.yaml'
-        #     assert os.path.isfile(default_upstream_config)
-        #     args.upstream_config = default_upstream_config
-        # if os.path.isfile(args.upstream_config):
-        #     copyfile(args.upstream_config, f'{args.expdir}/config_model.yaml')
-        # else:
-        #     raise FileNotFoundError('Wrong file path for model config.')
+        if args.upstream_config is None:
+            default_upstream_config = f'pretrain/{upstream_dirs[0]}/config_model.yaml'
+            assert os.path.isfile(default_upstream_config)
+            args.upstream_config = default_upstream_config
+        if os.path.isfile(args.upstream_config):
+            copyfile(args.upstream_config, f'{args.expdir}/config_model.yaml')
+        else:
+            raise FileNotFoundError('Wrong file path for model config.')
 
     if args.override is not None and args.override.lower() != "none":
         override(args.override, args, config)

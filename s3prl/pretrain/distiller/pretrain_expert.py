@@ -100,7 +100,7 @@ class UpstreamPretrainExpert(nn.Module):
             if not self.multi_gpu
             else self.model.float().module.distiller.state_dict()
         )
-        all_states["Config"] = self.upstream_config
+        all_states["Upstream_Config"] = self.upstream_config
         return all_states
 
     # Interface
@@ -113,12 +113,10 @@ class UpstreamPretrainExpert(nn.Module):
         Args:
             data:
                 [wave_input, pad_mask]
-
             records:
                 defaultdict(list), by appending contents into records,
                 these contents can be averaged and logged on Tensorboard
                 later by self.log_records every log_step
-
         Return:
             loss
         """
@@ -154,16 +152,13 @@ class UpstreamPretrainExpert(nn.Module):
         Args:
             records:
                 defaultdict(list), contents already appended
-
             logger:
                 Tensorboard SummaryWriter
                 please use f'{prefix}your_content_name' as key name
                 to log your customized contents
-
             prefix:
                 used to indicate downstream and train/test on Tensorboard
                 eg. 'phone/train-'
-
             global_step:
                 global_step in runner, which is helpful for Tensorboard logging
         """

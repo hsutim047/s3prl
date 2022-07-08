@@ -105,6 +105,8 @@ class WaveDataset(Dataset):
         sets,
         max_timestep=0,
         libri_root=None,
+        wavs_list=None,
+        wavs_name_to_len=None,
         **kwargs
     ):
         super().__init__()
@@ -117,26 +119,33 @@ class WaveDataset(Dataset):
                 "[Dataset] - Sampling random segments for training, sample length:",
                 self.sample_length,
             )
+        self.wavs_list = wavs_list
+        
+        if self.wavs_list == None:
+            # Read file
+            self.root = file_path
+            tables = [pd.read_csv(os.path.join(file_path, s + ".csv")) for s in sets]
+            self.table = pd.concat(tables, ignore_index=True).sort_values(
+                by=["length"], ascending=False
+            )
+            print("[Dataset] - Training data from these sets:", str(sets))
+            
+            # Drop seqs that are too long
+            if max_timestep > 0:
+                self.table = self.table[self.table.length < max_timestep]
+            # Drop seqs that are too short
+            if max_timestep < 0:
+                self.table = self.table[self.table.length > (-1 * max_timestep)]
 
-        # Read file
-        self.root = file_path
-        tables = [pd.read_csv(os.path.join(file_path, s + ".csv")) for s in sets]
-        self.table = pd.concat(tables, ignore_index=True).sort_values(
-            by=["length"], ascending=False
-        )
-        print("[Dataset] - Training data from these sets:", str(sets))
-
-        # Drop seqs that are too long
-        if max_timestep > 0:
-            self.table = self.table[self.table.length < max_timestep]
-        # Drop seqs that are too short
-        if max_timestep < 0:
-            self.table = self.table[self.table.length > (-1 * max_timestep)]
-
-        X = self.table["file_path"].tolist()
-        X_lens = self.table["length"].tolist()
-        self.num_samples = len(X)
-        print("[Dataset] - Number of individual training instances:", self.num_samples)
+            X = self.table["file_path"].tolist()
+            X_lens = self.table["length"].tolist()
+            self.num_samples = len(X)
+            print("[Dataset] - Number of individual training instances:", self.num_samples)
+        else:
+            X = self.wavs_list
+            X_lens = [wavs_name_to_len(wav_name) for wav_name in self.wavs_list]
+            self.num_samples = len(X)
+            print("[Dataset] - Number of individual training instances:", self.num_samples)
 
         # Use bucketing to allow different batch size at run time
         self.X = []
