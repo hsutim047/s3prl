@@ -43,7 +43,7 @@ def get_pretrain_args():
 
     # upstream settings
     parser.add_argument('-u', '--upstream', choices=os.listdir('pretrain/'))
-    # parser.add_argument('-g', '--upstream_config', metavar='CONFIG_PATH', help='The yaml file for configuring the upstream model')
+    parser.add_argument('-g', '--upstream_config', metavar='CONFIG_PATH', help='The yaml file for configuring the upstream model')
 
     # experiment directory, choose one to specify
     # expname uses the default root directory: result/pretrain

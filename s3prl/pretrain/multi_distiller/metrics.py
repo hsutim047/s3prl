@@ -13,14 +13,12 @@ def calculate_consine_similarity_score(preds):
             if i == j:
                 continue
             score += cos(preds[i], preds[j]).sum(dim=-1)
-    return scores
+    return score.tolist()
 
 
-
+'''
 if __name__ == "__main__":
-    '''
-    Eg: B=4, N=3, T=2, D=2
-    '''
     preds = [torch.ones(4, 3, 2, 2), torch.ones(4, 3, 2, 2)]
     scores = calculate_consine_similarity_score(preds)
     print(scores)
+'''

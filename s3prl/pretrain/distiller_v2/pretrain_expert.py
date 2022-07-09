@@ -3,16 +3,14 @@
     Author: Heng-Jui Chang (https://github.com/vectominist)
 """
 
-from collections import defaultdict
 from easydict import EasyDict as edict
 import yaml
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, ConcatDataset
-from pretrain.multi_distiller.dataset import OnlineWaveDataset
+from torch.utils.data import DataLoader
+from pretrain.distiller.dataset import OnlineWaveDataset
 from upstream.distiller.model import DistillerConfig, DistillerModel
-import random
 
 
 def freeze_model(model):
@@ -20,7 +18,7 @@ def freeze_model(model):
     for param in model.parameters():
         param.requires_grad = False
 
-        
+
 class UpstreamPretrainExpert(nn.Module):
     """
     The Distiller pretrain expert
@@ -34,9 +32,7 @@ class UpstreamPretrainExpert(nn.Module):
         self.datarc = datarc
         self.device = device
         self.multi_gpu = multi_gpu
-        self.datasets = []
-        self.dataloaders = []
-        
+
         if type(upstream_config) == str:
             self.upstream_config = yaml.load(
                 open(upstream_config, "r"), Loader=yaml.FullLoader
@@ -53,180 +49,124 @@ class UpstreamPretrainExpert(nn.Module):
         else:
             raise ValueError
 
-        # get agents config
-        self.agent_config = edict(self.upstream_config["multi_agent"])
-        model_configs = [DistillerConfig(self.upstream_config[agent_name]) for agent_name in self.agent_config.agents_name]
-        self.num_agents = self.agent_config.num_agents
-        
-        # init teacher
-        teacher_config = edict(self.upstream_config["teacher"])
-        teacher = torch.hub.load("s3prl/s3prl", teacher_config.model)
-        if (
-            teacher_config.model.find("hubert") >= 0
-            or teacher_config.model.find("wav2vec2") >= 0
-        ):
-            teacher.model.encoder.layerdrop = 0
-            print("[DistillerForPretrain] - Disabled teacher's encoder layerdrop")
+        self._get_train_dataloader()
 
-        # check agents and teacher
-        for model_config in model_configs:
-            assert model_config.n_tasks <= teacher_config.n_layers, (
-                model_config.n_tasks,
-                teacher_config.n_layers,
-            )
-        print(
-            "[DistillerForPretrain] - Using {} as teacher with {} layers".format(
-                teacher_config.model, teacher_config.n_layers
-            )
+        print("[UpstreamPretrainExpert] - Initializing model...")
+        model_config = DistillerConfig(self.upstream_config["distiller"])
+        self.model = DistillerForPretrain(
+            model_config, edict(self.upstream_config["teacher"])
         )
 
-        # freeze teacher
-        self.teacher = teacher.to(device)
-        freeze_model(self.teacher)
-        
-        # prepare agents
-        print(f"[UpstreamPretrainExpert] - Initializing {self.agent_config.num_agents} models...")
-        self.models = [DistillerForPretrain(model_config, self.teacher).to(device) for model_config in model_configs]
-
-        # set multi gpu
         if self.multi_gpu:
-            self.models = [torch.nn.DataParallel(model) for model in self.models]
-        print(
-            "[UpstreamPretrainExpert] - Multi-GPU training Enabled: "
-            + str(torch.cuda.device_count())
-        )
+            self.model = torch.nn.DataParallel(self.model)
+            print(
+                "[UpstreamPretrainExpert] - Multi-GPU training Enabled: "
+                + str(torch.cuda.device_count())
+            )
         print(
             "[UpstreamPretrainExpert] - Number of parameters: "
-            + str(sum(p.numel() for model in self.models for p in model.parameters() if p.requires_grad))
+            + str(sum(p.numel() for p in self.model.parameters() if p.requires_grad))
         )
 
-    def _get_train_dataloader(self, wavs_list, wavs_name_to_length, idx):
-        curr_dataset = OnlineWaveDataset(
+    def _get_train_dataloader(self):
+        dataset = OnlineWaveDataset(
             self.upstream_config["task"],
             self.datarc["train_batch_size"],
             target_level=self.upstream_config["audio"]["target_level"],
-            wavs_list=wavs_list,
-            wavs_name_to_length=wavs_name_to_length,
             **self.datarc,
         )
-        try:
-            prev_dataset = self.datasets[idx]
-            dataset = ConcatDataset([prev_dataset, curr_dataset])
-            self.datasets[idx] = dataset
-        except IndexError:
-            dataset = curr_dataset
-            self.datasets.append(dataset)
-                  
-        dataloader = DataLoader(
+
+        self.dataloader = DataLoader(
             dataset,
             batch_size=1,  # for bucketing
             shuffle=True,
             num_workers=self.datarc["num_workers"],
             drop_last=False,
             pin_memory=True,
-            collate_fn=curr_dataset.collate_fn,
+            collate_fn=dataset.collate_fn,
         )
-        return dataloader
 
     # Interface
     def load_model(self, all_states):
         if self.multi_gpu:
-            for model, agent_name in zip(self.models, self.agent_config.agents_name):
-                model.module.distiller.load_state_dict(all_states[agent_name])
+            self.model.module.distiller.load_state_dict(all_states["Distiller"])
         else:
-            for model, agent_name in zip(self.models, self.agent_config.agents_name):
-                model.distiller.load_state_dict(all_states[agent_name])
+            self.model.distiller.load_state_dict(all_states["Distiller"])
 
     # Interface
     def add_state_to_save(self, all_states):
-        for model, agent_name in zip(self.models, self.agent_config.agents_name):
-            all_states[agent_name] = (
-                model.float().distiller.state_dict()
-                if not self.multi_gpu
-                else model.float().module.distiller.state_dict()
-            )
+        all_states["Distiller"] = (
+            self.model.float().distiller.state_dict()
+            if not self.multi_gpu
+            else self.model.float().module.distiller.state_dict()
+        )
         all_states["Upstream_Config"] = self.upstream_config
         return all_states
 
     # Interface
-    def get_train_dataloader(self, hard_wavs_list, round_hours, round_sample_rate, wavs_name_to_length):
-        self.dataloaders = []
-        part_round_length = round_hours * 3600 * 16000 * round_sample_rate
-        for idx in range(self.num_agents):
-            wavs_list = []
-            total_wavs_length = 0
-            while total_wavs_length < part_round_length:
-                wav = random.sample(hard_wavs_list, 1)
-                wavs_list += wav
-                total_wavs_length += wavs_name_to_length[wav[0]]
-            dataloader = self._get_train_dataloader(wavs_list, wavs_name_to_length, idx)
-            self.dataloaders.append(dataloader)            
-        return self.dataloaders
+    def get_train_dataloader(self):
+        return self.dataloader
 
-    # Interface Not done ######################################################################
-    def forward(self, data_list, records_list, global_step=0, log_step=1000, **kwargs):
+    # Interface
+    def forward(self, data, records={}, global_step=0, log_step=1000, **kwargs):
         """
         Args:
             data:
-                [[wave_input1, pad_mask1], [wave_input2, pad_mask2], ...]
+                [wave_input, pad_mask]
             records:
-                [defaultdict(list), ...], by appending contents into records,
+                defaultdict(list), by appending contents into records,
                 these contents can be averaged and logged on Tensorboard
                 later by self.log_records every log_step
         Return:
-            losses
+            loss
         """
-        losses = []
-        
-        for data, model, records in zip(data_list, self.models, records_list):
-            
-            wave_input, wave_orig, wave_len, pad_mask = data
-            wave_input = wave_input.to(self.device)
-            wave_len = wave_len.to(self.device)
-            pad_mask = pad_mask.type(wave_input.dtype).to(self.device)
 
-            loss, other_res, _ = model(
-                wave_input,
-                wave_orig,
-                wave_len,
-                pad_mask,
-                return_other=global_step % log_step == 0,
-            )
-            losses.append(loss)
+        wave_input, wave_orig, wave_len, pad_mask = data
+        wave_input = wave_input.to(self.device)
+        wave_len = wave_len.to(self.device)
+        pad_mask = pad_mask.type(wave_input.dtype).to(self.device)
 
-            if global_step % log_step == 0:
-                for key, value in other_res.items():
-                    if isinstance(value, torch.Tensor):
-                        value = float(value.mean().cpu().item())
-                    records[key] = value
+        loss, other_res = self.model(
+            wave_input,
+            wave_orig,
+            wave_len,
+            pad_mask,
+            return_other=global_step % log_step == 0,
+        )
 
-        return losses, records_list
+        if global_step % log_step == 0:
+            for key, value in other_res.items():
+                if isinstance(value, torch.Tensor):
+                    value = float(value.mean().cpu().item())
+                records[key] = value
+
+        return loss, records
 
     # interface
     def on_before_zero_grad(self):
         pass
 
     # interface
-    def log_records(self, records_list, logger, prefix, global_step, **kwargs):
+    def log_records(self, records, logger, prefix, global_step, **kwargs):
         """
         Args:
             records:
-                [defaultdict(list), ...], contents already appended
+                defaultdict(list), contents already appended
             logger:
                 Tensorboard SummaryWriter
                 please use f'{prefix}your_content_name' as key name
                 to log your customized contents
             prefix:
-                train/test
+                used to indicate downstream and train/test on Tensorboard
+                eg. 'phone/train-'
             global_step:
                 global_step in runner, which is helpful for Tensorboard logging
         """
-        for agent_name, records in zip(self.agents_name, records_list):
-            for key, values in records.items():
-                if isinstance(values, torch.Tensor) and len(values.shape) > 1:
-                    logger.add_image(f'{agent_name}/{prefix}-{key}', values, global_step=global_step)
-                elif isinstance(values, float):
-                    logger.add_scalar(f'{agent_name}/{prefix}-{key}', values, global_step=global_step)
+        for key, values in records.items():
+            if isinstance(values, torch.Tensor) and len(values.shape) > 1:
+                logger.add_image(f"{prefix}{key}", values, global_step=global_step)
+            elif isinstance(values, float):
+                logger.add_scalar(f"{prefix}{key}", values, global_step=global_step)
 
 
 class DistillerForPretrain(nn.Module):
@@ -234,11 +174,31 @@ class DistillerForPretrain(nn.Module):
     Distiller for pretraining
     """
 
-    def __init__(self, config: DistillerConfig, teacher):
+    def __init__(self, config: DistillerConfig, teacher_config: edict):
         super().__init__()
         self.config = config
         self.distiller = DistillerModel(config)
-        self.teacher = teacher        
+
+        self.teacher_config = teacher_config
+        teacher = torch.hub.load("s3prl/s3prl", teacher_config.model)
+        if (
+            teacher_config.model.find("hubert") >= 0
+            or teacher_config.model.find("wav2vec2") >= 0
+        ):
+            teacher.model.encoder.layerdrop = 0
+            print("[DistillerForPretrain] - Disabled teacher's encoder layerdrop")
+        assert self.distiller.n_tasks <= teacher_config.n_layers, (
+            self.distiller.n_tasks,
+            teacher_config.n_layers,
+        )
+        self.teacher = teacher
+        freeze_model(self.teacher)
+
+        print(
+            "[DistillerForPretrain] - Using {} as teacher with {} layers".format(
+                teacher_config.model, teacher_config.n_layers
+            )
+        )
 
         if config.loss_type == "l1":
             self.loss_func = nn.L1Loss(reduction="none")
@@ -281,7 +241,6 @@ class DistillerForPretrain(nn.Module):
         wave_len: torch.Tensor,
         pad_mask: torch.Tensor,
         return_other: bool = False,
-        return_pred: bool = False,
     ):
         """
         Forward function.
@@ -361,10 +320,7 @@ class DistillerForPretrain(nn.Module):
         else:
             other_res = None
 
-        if return_pred == False:
-            pred = None
-            
-        return total_loss, other_res, pred
+        return total_loss, other_res
 
     def compute_loss(self, feat, pred, target, return_other=False):
         """

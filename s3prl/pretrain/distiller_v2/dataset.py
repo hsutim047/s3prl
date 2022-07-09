@@ -19,13 +19,11 @@ class OnlineWaveDataset(WaveDataset):
         self,
         task_config,
         bucket_size,
-        file_path=None,
-        sets=None,
+        file_path,
+        sets,
         max_timestep=0,
         libri_root=None,
         target_level=-25,
-        wavs_list=None,
-        wavs_name_to_length=None,
         **kwargs
     ):
         super().__init__(
@@ -35,16 +33,14 @@ class OnlineWaveDataset(WaveDataset):
             sets,
             max_timestep,
             libri_root,
-            wavs_list,
-            wavs_name_to_length,
             **kwargs
         )
         self.target_level = target_level
 
     def _load_feat(self, feat_path):
-        #if self.libri_root is None:
-        #    return torch.FloatTensor(np.load(os.path.join(self.root, feat_path)))
-        wav, _ = torchaudio.load(os.path.join(self.root, feat_path))
+        if self.libri_root is None:
+            return torch.FloatTensor(np.load(os.path.join(self.root, feat_path)))
+        wav, _ = torchaudio.load(os.path.join(self.libri_root, feat_path))
         return wav.squeeze()  # (seq_len)
 
     def __getitem__(self, index):

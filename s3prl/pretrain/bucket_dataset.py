@@ -106,7 +106,7 @@ class WaveDataset(Dataset):
         max_timestep=0,
         libri_root=None,
         wavs_list=None,
-        wavs_name_to_len=None,
+        wavs_name_to_length=None,
         **kwargs
     ):
         super().__init__()
@@ -120,7 +120,7 @@ class WaveDataset(Dataset):
                 self.sample_length,
             )
         self.wavs_list = wavs_list
-        
+        self.wavs_name_to_length = wavs_name_to_length
         if self.wavs_list == None:
             # Read file
             self.root = file_path
@@ -142,8 +142,9 @@ class WaveDataset(Dataset):
             self.num_samples = len(X)
             print("[Dataset] - Number of individual training instances:", self.num_samples)
         else:
+            self.root = ""
             X = self.wavs_list
-            X_lens = [wavs_name_to_len(wav_name) for wav_name in self.wavs_list]
+            X_lens = [self.wavs_name_to_length[wav_name] for wav_name in self.wavs_list]
             self.num_samples = len(X)
             print("[Dataset] - Number of individual training instances:", self.num_samples)
 

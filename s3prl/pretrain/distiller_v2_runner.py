@@ -30,7 +30,7 @@ from optimizers import get_optimizer, get_grouped_parameters
 from schedulers import get_scheduler
 
 from .multi_distiller.dataset import OnlineWaveDataset
-from .multi_distiller.metrics import *
+
 ##########
 # RUNNER #
 ##########
@@ -184,16 +184,7 @@ class Runner():
         for data in tqdm(dataloader, dynamic_ncols=True, desc='train'):
             preds = []
             for model in self.upstream.models:
-                wave_input, wave_orig, wave_len, pad_mask = data
-                wave_input = wave_input.to(self.args.device)
-                wave_len = wave_len.to(self.args.device)
-                pad_mask = pad_mask.type(wave_input.dtype).to(self.args.device)
-                _, _, pred  = model(
-                    wave_input,
-                    wave_orig,
-                    wave_len,pad_mask,
-                    return_pred=True
-                ) # B x N x T x D
+                _, pred, _ = model(data, return_pred=True) # B x N x T x D
                 preds.append(pred)
             # agent_preds.append(torch.cat(preds, dim=0))
             scores += eval(f'calculate_{criteria}_score')(preds)
@@ -234,17 +225,19 @@ class Runner():
         # dataloader = self.upstream.get_train_dataloader()
 
         # prepare multi agent
-        num_agents = len(self.upstream.models)
-        agents_name = self.upstream_config['multi_agent']['agents_name']
         rounds = self.config['runner']['multi_agent']['rounds']
         round_hours = self.config['runner']['multi_agent']['round_hours']
         round_sample_rate = self.config['runner']['multi_agent']['round_sample_rate']
         
         all_wavs_list = self.get_all_wavs() # TODO*
         wavs_name_to_length = self.get_wavs_length() # TODO*
-        all_wavs_list, round_hard_wavs_list = self.sample_hours(all_wavs_list, wavs_name_to_length, round_hours) # TODO*
+        all_wavs_list, hard_wavs_list = self.sample_hours(all_wavs_list, wavs_name_to_length, round_hours) # TODO*
+        # dataloaders = [
+        #     upstream.get_train_dataloader(hard_wavs_list, round_sample_rate, wavs_name_to_length)
+        #     for upstream in self.upstreams
+        # ] # TODO*
 
-        dataloaders = self.upstream.get_train_dataloader(round_hard_wavs_list, round_hours, round_sample_rate, wavs_name_to_length)
+        dataloaders = self.upstream.get_train_dataloader(hard_wavs_list, round_hours, round_sample_rate, wavs_name_to_length)
 
         # TODO set epoch
         n_epochs = self.config['runner']['n_epochs']
@@ -291,10 +284,16 @@ class Runner():
             1. select data using DistilHuBERTs
             2. train those DistilHuBERTs by sampling data with round_sample_rate
             '''
-            if round_pbar.n >= 1:
-                all_wavs_list, round_hard_wavs_list = \
-                    self.select_hard_wavs(all_wavs_list, round_hours, wavs_name_to_length) # TODO*
-                dataloaders = self.upstream.get_train_dataloader(round_hard_wavs_list, round_hours, round_sample_rate, wavs_name_to_length)
+
+            all_wavs_list, round_hard_wavs_list = \
+                self.select_hard_wavs(all_wavs_list, round_hours, wavs_name_to_length) # TODO*
+
+            # dataloaders = [
+            #     upstream.get_train_dataloader(round_hard_wavs_list, round_hours, round_sample_rate, wavs_name_to_length)
+            #     for upstream in self.upstreams
+            # ] # combine past dataset and new hard wavs
+
+            dataloaders = self.upstream.get_train_dataloader(round_hard_wavs_list, round_hours, round_sample_rate, wavs_name_to_length)
 
             # set progress bar
             pbar = tqdm(total=total_steps, dynamic_ncols=True, desc='overall')
@@ -308,7 +307,7 @@ class Runner():
             records = [defaultdict(list)] * num_agents
 
             while pbar.n < pbar.total:
-                for data in tqdm(zip(*dataloaders), dynamic_ncols=True, desc='train'):
+                for data in tqdm(zip(dataloaders), dynamic_ncols=True, desc='train'):
                     # try/except block for forward/backward
                     try:
                         if pbar.n >= pbar.total:
@@ -318,7 +317,7 @@ class Runner():
                         with torch.cuda.amp.autocast(enabled=amp):
                             losses, records = self.upstream(
                                 data,
-                                records_list=records,
+                                records=records,
                                 global_step=global_step,
                                 log_step=self.config['runner']['log_step'],
                             )
@@ -336,7 +335,7 @@ class Runner():
                             for loss in losses:
                                 loss.backward()
                     except RuntimeError as e:
-                        if 'CUDA out of memory' in str(e):
+                        if 'CUDA out of memory' in e:
                             print(f'[Runner] - CUDA out of memory at step {global_step}')
                             torch.cuda.empty_cache()
                             for optimizer in optimizers:
@@ -401,7 +400,7 @@ class Runner():
                         
                         # log customized contents
                         self.upstream.log_records(
-                            records_list=records,
+                            records=records,
                             logger=self.logger,
                             prefix='train', # train/test
                             global_step=global_step,
@@ -445,4 +444,3 @@ class Runner():
                     pbar.update(1)
             
             pbar.close()
-            round_pbar.update(1)
