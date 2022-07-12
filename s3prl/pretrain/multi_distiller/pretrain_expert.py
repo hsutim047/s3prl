@@ -221,7 +221,7 @@ class UpstreamPretrainExpert(nn.Module):
             global_step:
                 global_step in runner, which is helpful for Tensorboard logging
         """
-        for agent_name, records in zip(self.agents_name, records_list):
+        for agent_name, records in zip(self.agent_config.agents_name, records_list):
             for key, values in records.items():
                 if isinstance(values, torch.Tensor) and len(values.shape) > 1:
                     logger.add_image(f'{agent_name}/{prefix}-{key}', values, global_step=global_step)

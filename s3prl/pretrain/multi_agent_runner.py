@@ -379,9 +379,10 @@ class Runner():
                                 optimizer.step()
                     
                     # adjust learning rate
-                    for scheduler in schedulers:
-                        if scheduler:
-                            scheduler.step()
+                    if schedulers:
+                        for scheduler in schedulers:
+                            if scheduler:
+                                scheduler.step()
                     
                     # logging
                     if global_step % self.config['runner']['log_step'] == 0 or pbar.n == pbar.total - 1:
@@ -432,8 +433,10 @@ class Runner():
                         )
                         all_states = self.upstream.add_state_to_save(all_states)
 
-                        for agent_name, scheduler in zip(agents_name, schedulers):
-                            all_states[f'Scheduler-{agent_name}'] = scheduler.state_dict()
+                        if schedulers:
+                            for agent_name, scheduler in zip(agents_name, schedulers):
+                                if scheduler:
+                                    all_states[f'Scheduler-{agent_name}'] = scheduler.state_dict()
                         
                         name = f'states-epoch-{n_epochs}.ckpt' if pbar.n == pbar.total - 1 and n_epochs > 0 \
                                else f'states-{global_step}.ckpt'

@@ -12,7 +12,7 @@ def calculate_consine_similarity_score(preds):
         for j in range(len(preds)):
             if i == j:
                 continue
-            score += cos(preds[i], preds[j]).sum(dim=-1)
+            score += cos(preds[i].clone().cpu(), preds[j].clone().cpu()).sum(dim=-1)
     return score.tolist()
 
 
